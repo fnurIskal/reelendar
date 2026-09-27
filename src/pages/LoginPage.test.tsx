@@ -2,9 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { LoginPage } from './LoginPage'
 
-const { resetPasswordForEmail, signInWithOAuth, signUp } = vi.hoisted(() => ({
+const { resetPasswordForEmail, signUp } = vi.hoisted(() => ({
   resetPasswordForEmail: vi.fn(),
-  signInWithOAuth: vi.fn(),
   signUp: vi.fn(),
 }))
 
@@ -13,17 +12,15 @@ vi.mock('../lib/supabase', () => ({
     auth: {
       getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
       resetPasswordForEmail,
-      signInWithOAuth,
       signInWithPassword: vi.fn(),
       signUp,
     },
   },
 }))
 
-describe('LoginPage account recovery and social sign-in', () => {
+describe('LoginPage account recovery and registration', () => {
   beforeEach(() => {
     resetPasswordForEmail.mockReset().mockResolvedValue({ error: null })
-    signInWithOAuth.mockReset().mockResolvedValue({ error: null })
     signUp.mockReset().mockResolvedValue({ data: { session: null }, error: null })
   })
 
@@ -36,16 +33,6 @@ describe('LoginPage account recovery and social sign-in', () => {
       redirectTo: `${window.location.origin}/reset-password`,
     }))
     expect(await screen.findByText(/a recovery link is on its way/i)).toBeInTheDocument()
-  })
-
-  it('starts Google OAuth with the app callback URL', async () => {
-    render(<LoginPage />)
-    fireEvent.click(screen.getByRole('button', { name: 'CONTINUE WITH GOOGLE' }))
-
-    await waitFor(() => expect(signInWithOAuth).toHaveBeenCalledWith({
-      provider: 'google',
-      options: { redirectTo: `${window.location.origin}/app` },
-    }))
   })
 
   it('shows a success toast after creating an account that needs email confirmation', async () => {

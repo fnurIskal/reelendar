@@ -103,7 +103,7 @@ export function LandingPage() {
 
   return <main className="landing-shell">
     <header className="landing-header">
-      <a className="brand" href="/" aria-label="Reelendar home"><span className="brand-mark" aria-hidden="true">R</span><span>REELENDAR</span></a>
+      <a className="brand" href="/" aria-label="Reelendar home"><img className="brand-mark" src="/assets/reelendar-icon.png" alt="" /><span>REELENDAR</span></a>
       <p>YOUR LIFE, FRAME BY FRAME</p>
       <nav aria-label="Primary navigation">
         <a className="landing-sign-in" href="/login">SIGN IN</a>
@@ -157,8 +157,8 @@ export function LandingPage() {
     </section>
 
     <footer className="landing-footer scroll-reveal">
-      <a className="brand" href="/"><span className="brand-mark" aria-hidden="true">R</span><span>REELENDAR</span></a>
-      <span>Film data &amp; imagery by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span>
+      <a className="brand" href="/"><img className="brand-mark" src="/assets/reelendar-icon.png" alt="" /><span>REELENDAR</span></a>
+      <div className="footer-meta"><strong>DESIGNED &amp; BUILT BY FATMA NUR ISKAL</strong><span>Film data &amp; imagery by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span></div>
     </footer>
   </main>
 }

@@ -88,23 +88,10 @@ export function LoginPage() {
     setMessage(error ? error.message : 'If an account exists for this email, a recovery link is on its way.')
   }
 
-  async function signInWithGoogle() {
-    setLoading(true)
-    setMessage('')
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: `${window.location.origin}/app` },
-    })
-    if (error) {
-      setLoading(false)
-      setMessage(error.message)
-    }
-  }
-
   return <main className="login-page">
     {toastMessage && <ToastNotice message={toastMessage} onDismiss={() => setToastMessage('')} />}
     <header className="login-header">
-      <a className="brand" href="/"><span className="brand-mark" aria-hidden="true">R</span><span>REELENDAR</span></a>
+      <a className="brand" href="/"><img className="brand-mark" src="/assets/reelendar-icon.png" alt="" /><span>REELENDAR</span></a>
       <a href="/" className="back-home">← BACK HOME</a>
     </header>
 
@@ -129,8 +116,8 @@ export function LoginPage() {
             <div className="clapper-scene-copy">
               <p>SCENE {mode === 'login' ? '01' : '02'} · {mode === 'login' ? 'RETURN' : 'FIRST TAKE'}</p>
               <h1>{mode === 'login' ? <>Welcome<br /><em>back.</em></> : <>Start your<br /><em>archive.</em></>}</h1>
-              <span>{mode === 'login' ? 'Access saved films, ratings and notes.' : 'Create an account to sync films, ratings and notes.'}</span>
-              <small>PRIVATE FILM DIARY</small>
+              <span>{mode === 'login' ? 'Sign in to continue your private film diary.' : 'Create your account and keep your film diary synced.'}</span>
+              <small>YOUR PRIVATE ARCHIVE</small>
             </div>
 
             <div className="clapper-form-panel">
@@ -141,11 +128,9 @@ export function LoginPage() {
                 {message && <p className="status-message" role="status">{message}</p>}
                 <button className="auth-submit" type="submit" disabled={loading || isClapping}>{loading ? 'PLEASE WAIT…' : mode === 'login' ? 'SIGN IN' : 'CREATE ACCOUNT'}</button>
               </form>
-              <div className="auth-divider"><span>OR</span></div>
-              <button className="oauth-button" type="button" onClick={signInWithGoogle} disabled={loading || isClapping}>CONTINUE WITH GOOGLE</button>
               <div className="clapper-switch">
                 <span>{mode === 'login' ? 'NEED AN ACCOUNT?' : 'ALREADY HAVE AN ACCOUNT?'}</span>
-                <button type="button" onClick={changeScene} disabled={isClapping}>{mode === 'login' ? 'CREATE ACCOUNT' : 'SIGN IN'} <i aria-hidden="true">↗</i></button>
+                <button type="button" onClick={changeScene} disabled={isClapping}>{mode === 'login' ? 'CREATE ACCOUNT' : 'SIGN IN'}</button>
               </div>
               <a className="guest-link" href="/app">CONTINUE AS GUEST →</a>
             </div>

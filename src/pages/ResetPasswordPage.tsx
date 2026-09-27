@@ -46,7 +46,7 @@ export function ResetPasswordPage() {
 
   return <main className="login-page reset-page">
     <header className="login-header">
-      <a className="brand" href="/"><span className="brand-mark" aria-hidden="true">R</span><span>REELENDAR</span></a>
+      <a className="brand" href="/"><img className="brand-mark" src="/assets/reelendar-icon.png" alt="" /><span>REELENDAR</span></a>
       <a href="/login" className="back-home">BACK TO SIGN IN</a>
     </header>
     <section className="reset-layout" aria-labelledby="reset-title">

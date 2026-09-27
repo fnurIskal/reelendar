@@ -233,6 +233,17 @@ export default function App() {
     setSelectedDate(today)
   }
 
+  function changeView(mode: ViewMode) {
+    if (mode === 'day') {
+      if (!selectedDate) setSelectedDate(today)
+    } else {
+      setSelectedDate(null)
+      setNoteDate(null)
+      setNoteClosing(false)
+    }
+    setViewMode(mode)
+  }
+
   function openDay(date: Date) {
     if (dateKey(date) > todayKey) return
     const entry = entries[dateKey(date)]
@@ -478,7 +489,7 @@ export default function App() {
 
   return <main className="app-shell">
     <header className="site-header">
-      <a className="brand" href="/" aria-label="Reelendar home"><span className="brand-mark" aria-hidden="true">R</span><span>REELENDAR</span></a>
+      <a className="brand" href="/" aria-label="Reelendar home"><img className="brand-mark" src="/assets/reelendar-icon.png" alt="" /><span>REELENDAR</span></a>
       <p className="header-note">YOUR YEAR IN FILM</p>
       <div className="header-actions">
         <button className="today-button" type="button" onClick={goToToday}>Jump to today</button>
@@ -502,7 +513,7 @@ export default function App() {
     </section>
 
     <nav className="view-switcher" aria-label="Calendar view">
-      {(['month', 'year', 'day'] as ViewMode[]).map((mode) => <button key={mode} className={viewMode === mode ? 'active' : ''} onClick={() => { if (mode === 'day' && !selectedDate) setSelectedDate(today); setViewMode(mode) }}>{mode}</button>)}
+      {(['month', 'year', 'day'] as ViewMode[]).map((mode) => <button key={mode} className={viewMode === mode ? 'active' : ''} onClick={() => changeView(mode)}>{mode}</button>)}
     </nav>
 
     <div className="dashboard-layout">
@@ -522,7 +533,7 @@ export default function App() {
       <div className="primary-view">{viewMode === 'month' ? renderCalendar() : viewMode === 'year' ? renderYear() : renderDay()}</div>
     </div>
 
-    <footer><p>YOUR LIFE, <em>FRAME BY FRAME.</em></p><span>Film data &amp; imagery by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span></footer>
+    <footer><p>YOUR LIFE, <em>FRAME BY FRAME.</em></p><div className="footer-meta"><strong>DESIGNED &amp; BUILT BY FATMA NUR ISKAL</strong><span>Film data &amp; imagery by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB.</span></div></footer>
 
     {noteDate && noteEntry && <aside className={`note-panel ${noteClosing ? 'closing' : ''}`} aria-live="polite">
       <div className="note-paper">
