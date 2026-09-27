@@ -106,6 +106,7 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Movie[]>([])
   const [isSearching, setIsSearching] = useState(false)
+  const [showMovieSearch, setShowMovieSearch] = useState(false)
   const [error, setError] = useState('')
   const [commentDraft, setCommentDraft] = useState('')
   const [ratingDraft, setRatingDraft] = useState(0)
@@ -115,6 +116,7 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState('')
   const [toastMessage, setToastMessage] = useState(() => window.sessionStorage.getItem('reelendar.auth-toast') ?? '')
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchRequestIdRef = useRef(0)
 
   const cells = useMemo(() => getCalendarCells(viewDate), [viewDate])
   const selectedKey = selectedDate ? dateKey(selectedDate) : null
@@ -186,8 +188,46 @@ export default function App() {
   }, [watchlist, session])
 
   useEffect(() => {
-    if (selectedDate && !selectedEntry) searchInputRef.current?.focus()
-  }, [selectedDate, selectedEntry])
+    if (selectedDate && viewMode !== 'day' && showMovieSearch) searchInputRef.current?.focus()
+  }, [selectedDate, showMovieSearch, viewMode])
+
+  useEffect(() => {
+    const searchIsVisible = (Boolean(selectedDate) && viewMode !== 'day' && showMovieSearch) || watchlistPickerOpen
+    const trimmedQuery = query.trim()
+    if (!searchIsVisible || trimmedQuery.length < 2) return
+
+    const requestId = ++searchRequestIdRef.current
+    const controller = new AbortController()
+    const debounceTimer = window.setTimeout(async () => {
+      setIsSearching(true)
+      setError('')
+      try {
+        const params = new URLSearchParams({ query: trimmedQuery, include_adult: 'false', language: 'en-US' })
+        const response = await fetch(tmdbUrl('search/movie', params), {
+          signal: controller.signal,
+          headers: { accept: 'application/json' },
+        })
+        if (!response.ok) throw new Error(`TMDB request failed (${response.status})`)
+        const data = (await response.json()) as { results: Movie[] }
+        if (searchRequestIdRef.current !== requestId) return
+        const movies = data.results.filter((movie) => movie.poster_path).slice(0, 8)
+        setResults(movies)
+        if (!movies.length) setError(`No films found for “${trimmedQuery}”.`)
+      } catch (requestError) {
+        if (requestError instanceof Error && requestError.name === 'AbortError') return
+        if (searchRequestIdRef.current === requestId) {
+          setError(requestError instanceof Error ? requestError.message : 'Could not reach TMDB. Please try again.')
+        }
+      } finally {
+        if (searchRequestIdRef.current === requestId) setIsSearching(false)
+      }
+    }, 400)
+
+    return () => {
+      window.clearTimeout(debounceTimer)
+      controller.abort()
+    }
+  }, [query, selectedDate, showMovieSearch, viewMode, watchlistPickerOpen])
 
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent) {
@@ -260,6 +300,7 @@ export default function App() {
     setCommentDraft(entry?.comment ?? '')
     setRatingDraft(entry?.rating ?? 0)
     setIsSaved(false)
+    setShowMovieSearch(!entry)
     setQuery('')
     setResults([])
     setError('')
@@ -280,6 +321,7 @@ export default function App() {
     setCommentDraft(entry?.comment ?? '')
     setRatingDraft(entry?.rating ?? 0)
     setIsSaved(false)
+    setShowMovieSearch(false)
     setNoteDate(null)
     setNoteClosing(false)
   }
@@ -288,6 +330,7 @@ export default function App() {
     setSelectedDate(null)
     setWatchlistPickerOpen(false)
     setSettingsOpen(false)
+    setShowMovieSearch(false)
     setQuery('')
     setResults([])
     setError('')
@@ -297,25 +340,6 @@ export default function App() {
     const library = buildLibraryExport(entries, watchlist, session?.user.email ?? null)
     downloadLibraryExport(library)
     setSyncMessage('Your Reelendar data was exported as JSON.')
-  }
-
-  async function searchMovies(event: FormEvent) {
-    event.preventDefault()
-    const trimmedQuery = query.trim()
-    if (!trimmedQuery) return
-    setIsSearching(true)
-    setError('')
-    try {
-      const params = new URLSearchParams({ query: trimmedQuery, include_adult: 'false', language: 'en-US' })
-      const response = await fetch(tmdbUrl('search/movie', params), { headers: { accept: 'application/json' } })
-      if (!response.ok) throw new Error(`TMDB request failed (${response.status})`)
-      const data = (await response.json()) as { results: Movie[] }
-      const movies = data.results.filter((movie) => movie.poster_path).slice(0, 8)
-      setResults(movies)
-      if (!movies.length) setError(`No films found for “${trimmedQuery}”.`)
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not reach TMDB. Please try again.')
-    } finally { setIsSearching(false) }
   }
 
   async function chooseMovie(movie: Movie) {
@@ -328,6 +352,7 @@ export default function App() {
     setEntries((current) => ({ ...current, [selectedKey]: nextEntry }))
     setResults([])
     setQuery('')
+    setShowMovieSearch(false)
     if (userId) {
       try {
         await upsertDiaryEntry(userId, selectedKey, nextEntry)
@@ -354,12 +379,32 @@ export default function App() {
       try {
         await upsertDiaryEntry(userId, selectedKey, nextEntry)
         setSyncMessage('Your note is synced.')
+        if (viewMode !== 'day') closeDialog()
       } catch {
         setEntries((current) => ({ ...current, [selectedKey]: previousEntry }))
         setIsSaved(false)
         setSyncMessage('Your note could not be synced. Please try again.')
       }
+    } else if (viewMode !== 'day') {
+      closeDialog()
     }
+  }
+
+  function updateSearchQuery(value: string) {
+    setQuery(value)
+    if (value.trim().length < 2) {
+      searchRequestIdRef.current += 1
+      setResults([])
+      setError('')
+      setIsSearching(false)
+    }
+  }
+
+  function returnToMovieSearch() {
+    setShowMovieSearch(true)
+    setQuery('')
+    setResults([])
+    setError('')
   }
 
   async function confirmDelete() {
@@ -411,6 +456,7 @@ export default function App() {
   function openWatchlistPicker() {
     setSelectedDate(null)
     setWatchlistPickerOpen(true)
+    setShowMovieSearch(false)
     setQuery('')
     setResults([])
     setError('')
@@ -551,12 +597,9 @@ export default function App() {
       <section className="movie-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <button className="close-button" type="button" onClick={closeDialog} aria-label="Close dialog">×</button>
         <p className="dialog-kicker">{fullDateFormatter.format(selectedDate).toUpperCase()}</p>
-        <h2 id="dialog-title">{selectedEntry ? selectedEntry.movie.title : 'Add a film'}</h2>
-        {selectedEntry && <div className="selected-film-summary"><img src={`${IMAGE_URL}${selectedEntry.movie.poster_path}`} alt="" /><JournalEditor comment={commentDraft} rating={ratingDraft} saved={isSaved} onComment={(value) => { setCommentDraft(value); setIsSaved(false) }} onRating={(value) => { setRatingDraft(value); setIsSaved(false) }} onSave={saveJournalEntry} /></div>}
-        <p className="dialog-intro">{selectedEntry ? 'Change the film or update your note.' : 'Search TMDB and choose the poster you want to remember this day by.'}</p>
-        <form className="search-form" onSubmit={searchMovies}><SearchIcon /><input ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a title…" aria-label="Movie title" /><button type="submit" disabled={isSearching || !query.trim()}>{isSearching ? 'Searching…' : 'Search'}</button></form>
-        {error && <p className="status-message" role="alert">{error}</p>}
-        <div className="movie-results" aria-live="polite">{results.map((movie) => <article key={movie.id} className="movie-card"><button type="button" className="movie-select" onClick={() => chooseMovie(movie)}><img src={`${IMAGE_URL}${movie.poster_path}`} alt={`${movie.title} poster`} /><span className="movie-card-copy"><strong>{movie.title}</strong><span>{movie.release_date?.slice(0, 4) || 'Year unknown'} · {movie.vote_average.toFixed(1)} ★</span></span></button><button className="watchlist-toggle" type="button" onClick={() => toggleWatchlist(movie)}>{watchlist.some((item) => item.id === movie.id) ? '− LIST' : '+ LIST'}</button></article>)}</div>
+        <h2 id="dialog-title">{showMovieSearch ? selectedEntry ? 'Choose another film' : 'Add a film' : selectedEntry?.movie.title}</h2>
+        {selectedEntry && !showMovieSearch && <><div className="selected-film-summary"><img src={`${IMAGE_URL}${selectedEntry.movie.poster_path}`} alt="" /><JournalEditor comment={commentDraft} rating={ratingDraft} saved={isSaved} onComment={(value) => { setCommentDraft(value); setIsSaved(false) }} onRating={(value) => { setRatingDraft(value); setIsSaved(false) }} onSave={saveJournalEntry} /></div><button className="movie-search-back" type="button" onClick={returnToMovieSearch}>← BACK TO SEARCH</button></>}
+        {showMovieSearch && <><p className="dialog-intro">Search TMDB and choose the poster you want to remember this day by.</p><div className="search-form" role="search"><SearchIcon /><input ref={searchInputRef} value={query} onChange={(event) => updateSearchQuery(event.target.value)} placeholder="Search a title…" aria-label="Movie title" /><span className="search-form-status" aria-live="polite">{isSearching ? 'SEARCHING…' : query.trim().length < 2 ? 'TYPE 2+ CHARACTERS' : 'AUTO SEARCH'}</span></div>{error && <p className="status-message" role="alert">{error}</p>}<div className="movie-results" aria-live="polite">{results.map((movie) => <article key={movie.id} className="movie-card"><button type="button" className="movie-select" onClick={() => chooseMovie(movie)}><img src={`${IMAGE_URL}${movie.poster_path}`} alt={`${movie.title} poster`} /><span className="movie-card-copy"><strong>{movie.title}</strong><span>{movie.release_date?.slice(0, 4) || 'Year unknown'} · {movie.vote_average.toFixed(1)} ★</span></span></button><button className="watchlist-toggle" type="button" onClick={() => toggleWatchlist(movie)}>{watchlist.some((item) => item.id === movie.id) ? '− LIST' : '+ LIST'}</button></article>)}</div></>}
       </section>
     </div>}
 
@@ -572,7 +615,7 @@ export default function App() {
         <button className="close-button" type="button" onClick={closeDialog} aria-label="Close dialog">×</button>
         <p className="dialog-kicker">YOUR NEXT FRAME</p><h2 id="watchlist-dialog-title">Add to watchlist</h2>
         <p className="dialog-intro">Search TMDB and keep films you want to watch close.</p>
-        <form className="search-form" onSubmit={searchMovies}><SearchIcon /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a title…" aria-label="Watchlist movie title" autoFocus /><button type="submit" disabled={isSearching || !query.trim()}>{isSearching ? 'Searching…' : 'Search'}</button></form>
+        <div className="search-form" role="search"><SearchIcon /><input value={query} onChange={(event) => updateSearchQuery(event.target.value)} placeholder="Search a title…" aria-label="Watchlist movie title" autoFocus /><span className="search-form-status" aria-live="polite">{isSearching ? 'SEARCHING…' : query.trim().length < 2 ? 'TYPE 2+ CHARACTERS' : 'AUTO SEARCH'}</span></div>
         {error && <p className="status-message" role="alert">{error}</p>}
         <div className="watchlist-picker-results">{results.map((movie) => <button type="button" key={movie.id} className={watchlist.some((item) => item.id === movie.id) ? 'added' : ''} onClick={() => toggleWatchlist(movie)}><img src={`${IMAGE_URL}${movie.poster_path}`} alt="" /><span><strong>{movie.title}</strong><small>{watchlist.some((item) => item.id === movie.id) ? 'ADDED ✓' : '+ ADD TO LIST'}</small></span></button>)}</div>
       </section>
