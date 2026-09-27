@@ -1,20 +1,27 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import type { Session } from '@supabase/supabase-js'
+import { ToastNotice } from './components/ToastNotice'
+import { buildLibraryExport, downloadLibraryExport } from './lib/account'
+import {
+  addWatchlistItem,
+  loadUserLibrary,
+  migrateLocalLibrary,
+  removeDiaryEntry,
+  removeWatchlistItem,
+  supabase,
+  upsertDiaryEntry,
+  type DiaryEntry,
+  type Movie,
+} from './lib/supabase'
 
-type Movie = {
-  id: number
-  title: string
-  original_title: string
-  poster_path: string | null
-  release_date?: string
-  vote_average: number
-}
-
-type DiaryEntry = { movie: Movie; comment: string; rating: number }
 type ViewMode = 'month' | 'year' | 'day'
 type CalendarCell = { date: Date; key: string; isCurrentMonth: boolean }
 
-const API_URL = 'https://api.themoviedb.org/3'
+const API_URL = '/api/tmdb'
 const IMAGE_URL = 'https://image.tmdb.org/t/p/w500'
+const ENTRIES_STORAGE_KEY = 'reelendar.entries.v1'
+const WATCHLIST_STORAGE_KEY = 'reelendar.watchlist.v1'
+const WATCHLIST_PAGE_SIZE = 5
 const WEEKDAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
 const monthFormatter = new Intl.DateTimeFormat('en-US', { month: 'long' })
 const fullDateFormatter = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
@@ -28,6 +35,21 @@ function dateKey(date: Date) {
 
 function monthKey(date: Date) {
   return dateKey(date).slice(0, 7)
+}
+
+function tmdbUrl(endpoint: string, params: URLSearchParams) {
+  const requestParams = new URLSearchParams(params)
+  requestParams.set('endpoint', endpoint)
+  return `${API_URL}?${requestParams}`
+}
+
+function readLocalStorage<T>(key: string, fallback: T): T {
+  try {
+    const storedValue = window.localStorage.getItem(key)
+    return storedValue ? JSON.parse(storedValue) as T : fallback
+  } catch {
+    return fallback
+  }
 }
 
 function getCalendarCells(viewDate: Date): CalendarCell[] {
@@ -49,6 +71,23 @@ function SearchIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
 }
 
+function getProfileName(session: Session) {
+  return String(
+    session.user.user_metadata.display_name
+    ?? session.user.user_metadata.full_name
+    ?? session.user.email?.split('@')[0]
+    ?? 'Profile',
+  )
+}
+
+function ProfileAvatar({ session }: { session: Session }) {
+  const name = getProfileName(session)
+  const avatarUrl = String(session.user.user_metadata.avatar_url ?? session.user.user_metadata.picture ?? '')
+  return <span className="profile-avatar" aria-hidden="true">
+    {avatarUrl ? <img src={avatarUrl} alt="" referrerPolicy="no-referrer" /> : name.charAt(0).toUpperCase()}
+  </span>
+}
+
 export default function App() {
   const today = useMemo(() => new Date(), [])
   const todayKey = dateKey(today)
@@ -58,9 +97,11 @@ export default function App() {
   const [noteClosing, setNoteClosing] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Date | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('month')
-  const [entries, setEntries] = useState<Record<string, DiaryEntry>>({})
-  const [watchlist, setWatchlist] = useState<Movie[]>([])
+  const [entries, setEntries] = useState<Record<string, DiaryEntry>>(() => readLocalStorage(ENTRIES_STORAGE_KEY, {}))
+  const [watchlist, setWatchlist] = useState<Movie[]>(() => readLocalStorage(WATCHLIST_STORAGE_KEY, []))
+  const [watchlistPage, setWatchlistPage] = useState(0)
   const [watchlistPickerOpen, setWatchlistPickerOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [releases, setReleases] = useState<Movie[]>([])
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Movie[]>([])
@@ -69,14 +110,80 @@ export default function App() {
   const [commentDraft, setCommentDraft] = useState('')
   const [ratingDraft, setRatingDraft] = useState(0)
   const [isSaved, setIsSaved] = useState(false)
+  const [session, setSession] = useState<Session | null | undefined>(undefined)
+  const [cloudLoading, setCloudLoading] = useState(false)
+  const [syncMessage, setSyncMessage] = useState('')
+  const [toastMessage, setToastMessage] = useState(() => window.sessionStorage.getItem('reelendar.auth-toast') ?? '')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const cells = useMemo(() => getCalendarCells(viewDate), [viewDate])
   const selectedKey = selectedDate ? dateKey(selectedDate) : null
   const selectedEntry = selectedKey ? entries[selectedKey] : undefined
   const noteEntry = noteDate ? entries[dateKey(noteDate)] : undefined
-  const token = import.meta.env.VITE_TMDB_ACCESS_TOKEN?.trim()
   const isCurrentMonth = monthKey(viewDate) === monthKey(today)
+  const userId = session?.user.id
+  const watchlistPageCount = Math.max(1, Math.ceil(watchlist.length / WATCHLIST_PAGE_SIZE))
+  const currentWatchlistPage = Math.min(watchlistPage, watchlistPageCount - 1)
+  const visibleWatchlist = watchlist.slice(currentWatchlistPage * WATCHLIST_PAGE_SIZE, (currentWatchlistPage + 1) * WATCHLIST_PAGE_SIZE)
+
+  useEffect(() => {
+    if (toastMessage) window.sessionStorage.removeItem('reelendar.auth-toast')
+  }, [toastMessage])
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      setSession(nextSession)
+      if (event === 'SIGNED_OUT') {
+        setEntries({})
+        setWatchlist([])
+        setSyncMessage('Signed out. This device is now showing a private local diary.')
+      }
+    })
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    if (!userId) return
+    let active = true
+
+    async function syncLibrary() {
+      try {
+        const localEntries = readLocalStorage<Record<string, DiaryEntry>>(ENTRIES_STORAGE_KEY, {})
+        const localWatchlist = readLocalStorage<Movie[]>(WATCHLIST_STORAGE_KEY, [])
+        if (Object.keys(localEntries).length || localWatchlist.length) {
+          await migrateLocalLibrary(userId!, localEntries, localWatchlist)
+          window.localStorage.removeItem(ENTRIES_STORAGE_KEY)
+          window.localStorage.removeItem(WATCHLIST_STORAGE_KEY)
+        }
+        const library = await loadUserLibrary(userId!)
+        if (!active) return
+        setEntries(library.entries)
+        setWatchlist(library.watchlist)
+        setSyncMessage('Your diary is synced.')
+      } catch {
+        if (active) setSyncMessage('Cloud sync failed. Your local data is still safe on this device.')
+      } finally {
+        if (active) setCloudLoading(false)
+      }
+    }
+
+    void Promise.resolve().then(() => {
+      if (!active) return
+      setCloudLoading(true)
+      setSyncMessage('Syncing your film diary…')
+      return syncLibrary()
+    })
+    return () => { active = false }
+  }, [userId])
+
+  useEffect(() => {
+    if (session === null) window.localStorage.setItem(ENTRIES_STORAGE_KEY, JSON.stringify(entries))
+  }, [entries, session])
+
+  useEffect(() => {
+    if (session === null) window.localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(watchlist))
+  }, [watchlist, session])
 
   useEffect(() => {
     if (selectedDate && !selectedEntry) searchInputRef.current?.focus()
@@ -91,7 +198,6 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!token) return
     const controller = new AbortController()
     const first = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1)
     const last = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0)
@@ -99,15 +205,15 @@ export default function App() {
       include_adult: 'false', include_video: 'false', language: 'en-US', page: '1',
       sort_by: 'popularity.desc', 'primary_release_date.gte': dateKey(first), 'primary_release_date.lte': dateKey(last),
     })
-    fetch(`${API_URL}/discover/movie?${params}`, {
+    fetch(tmdbUrl('discover/movie', params), {
       signal: controller.signal,
-      headers: { Authorization: `Bearer ${token}`, accept: 'application/json' },
+      headers: { accept: 'application/json' },
     })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('Release list unavailable')))
       .then((data: { results: Movie[] }) => setReleases(data.results.filter((movie) => movie.poster_path).slice(0, 5)))
       .catch((requestError: Error) => { if (requestError.name !== 'AbortError') setReleases([]) })
     return () => controller.abort()
-  }, [token, viewDate])
+  }, [viewDate])
 
   function changeMonth(amount: number) {
     setViewDate((current) => {
@@ -170,21 +276,27 @@ export default function App() {
   function closeDialog() {
     setSelectedDate(null)
     setWatchlistPickerOpen(false)
+    setSettingsOpen(false)
     setQuery('')
     setResults([])
     setError('')
+  }
+
+  function exportLibrary() {
+    const library = buildLibraryExport(entries, watchlist, session?.user.email ?? null)
+    downloadLibraryExport(library)
+    setSyncMessage('Your Reelendar data was exported as JSON.')
   }
 
   async function searchMovies(event: FormEvent) {
     event.preventDefault()
     const trimmedQuery = query.trim()
     if (!trimmedQuery) return
-    if (!token) return setError('Add VITE_TMDB_ACCESS_TOKEN to your .env file to search TMDB.')
     setIsSearching(true)
     setError('')
     try {
       const params = new URLSearchParams({ query: trimmedQuery, include_adult: 'false', language: 'en-US' })
-      const response = await fetch(`${API_URL}/search/movie?${params}`, { headers: { Authorization: `Bearer ${token}`, accept: 'application/json' } })
+      const response = await fetch(tmdbUrl('search/movie', params), { headers: { accept: 'application/json' } })
       if (!response.ok) throw new Error(`TMDB request failed (${response.status})`)
       const data = (await response.json()) as { results: Movie[] }
       const movies = data.results.filter((movie) => movie.poster_path).slice(0, 8)
@@ -195,25 +307,54 @@ export default function App() {
     } finally { setIsSearching(false) }
   }
 
-  function chooseMovie(movie: Movie) {
+  async function chooseMovie(movie: Movie) {
     if (!selectedKey) return
-    setCommentDraft(entries[selectedKey]?.comment ?? '')
-    setRatingDraft(entries[selectedKey]?.rating ?? 0)
+    const previousEntry = entries[selectedKey]
+    const nextEntry = { movie, comment: previousEntry?.comment ?? '', rating: previousEntry?.rating ?? 0 }
+    setCommentDraft(nextEntry.comment)
+    setRatingDraft(nextEntry.rating)
     setIsSaved(false)
-    setEntries((current) => ({ ...current, [selectedKey]: { movie, comment: current[selectedKey]?.comment ?? '', rating: current[selectedKey]?.rating ?? 0 } }))
+    setEntries((current) => ({ ...current, [selectedKey]: nextEntry }))
     setResults([])
     setQuery('')
+    if (userId) {
+      try {
+        await upsertDiaryEntry(userId, selectedKey, nextEntry)
+        setSyncMessage('Film saved to your diary.')
+      } catch {
+        setEntries((current) => {
+          const next = { ...current }
+          if (previousEntry) next[selectedKey] = previousEntry
+          else delete next[selectedKey]
+          return next
+        })
+        setSyncMessage('The film could not be saved. Please try again.')
+      }
+    }
   }
 
-  function saveJournalEntry() {
+  async function saveJournalEntry() {
     if (!selectedKey || !entries[selectedKey]) return
-    setEntries((current) => ({ ...current, [selectedKey]: { ...current[selectedKey], comment: commentDraft.trim(), rating: ratingDraft } }))
+    const previousEntry = entries[selectedKey]
+    const nextEntry = { ...previousEntry, comment: commentDraft.trim(), rating: ratingDraft }
+    setEntries((current) => ({ ...current, [selectedKey]: nextEntry }))
     setIsSaved(true)
+    if (userId) {
+      try {
+        await upsertDiaryEntry(userId, selectedKey, nextEntry)
+        setSyncMessage('Your note is synced.')
+      } catch {
+        setEntries((current) => ({ ...current, [selectedKey]: previousEntry }))
+        setIsSaved(false)
+        setSyncMessage('Your note could not be synced. Please try again.')
+      }
+    }
   }
 
-  function confirmDelete() {
+  async function confirmDelete() {
     if (!deleteTarget) return
     const targetKey = dateKey(deleteTarget)
+    const previousEntry = entries[targetKey]
     setEntries((current) => {
       const next = { ...current }
       delete next[targetKey]
@@ -225,12 +366,35 @@ export default function App() {
     }
     if (selectedKey === targetKey) closeDialog()
     setDeleteTarget(null)
+    if (userId) {
+      try {
+        await removeDiaryEntry(userId, targetKey)
+        setSyncMessage('Diary entry removed.')
+      } catch {
+        if (previousEntry) setEntries((current) => ({ ...current, [targetKey]: previousEntry }))
+        setSyncMessage('The entry could not be removed. Please try again.')
+      }
+    }
   }
 
-  function toggleWatchlist(movie: Movie) {
-    setWatchlist((current) => current.some((item) => item.id === movie.id)
-      ? current.filter((item) => item.id !== movie.id)
-      : [movie, ...current].slice(0, 5))
+  async function toggleWatchlist(movie: Movie) {
+    const previousWatchlist = watchlist
+    const removing = watchlist.some((item) => item.id === movie.id)
+    const nextWatchlist = removing
+      ? watchlist.filter((item) => item.id !== movie.id)
+      : [movie, ...watchlist]
+    setWatchlist(nextWatchlist)
+    if (!removing) setWatchlistPage(0)
+    if (userId) {
+      try {
+        if (removing) await removeWatchlistItem(userId, movie.id)
+        else await addWatchlistItem(userId, movie)
+        setSyncMessage(removing ? 'Removed from your watchlist.' : 'Added to your watchlist.')
+      } catch {
+        setWatchlist(previousWatchlist)
+        setSyncMessage('Your watchlist could not be synced. Please try again.')
+      }
+    }
   }
 
   function openWatchlistPicker() {
@@ -314,10 +478,23 @@ export default function App() {
 
   return <main className="app-shell">
     <header className="site-header">
-      <a className="brand" href="#top" aria-label="Reelendar home"><span className="brand-mark" aria-hidden="true">R</span><span>REELENDAR</span></a>
+      <a className="brand" href="/" aria-label="Reelendar home"><span className="brand-mark" aria-hidden="true">R</span><span>REELENDAR</span></a>
       <p className="header-note">YOUR YEAR IN FILM</p>
-      <button className="today-button" type="button" onClick={goToToday}>Jump to today</button>
+      <div className="header-actions">
+        <button className="today-button" type="button" onClick={goToToday}>Jump to today</button>
+        {session === undefined
+          ? <span className="auth-loading">CONNECTING…</span>
+          : session
+            ? <button className="profile-button" type="button" onClick={() => setSettingsOpen(true)} title={session.user.email} aria-label={`Open profile for ${getProfileName(session)}`}>
+              <ProfileAvatar session={session} />
+              <span className="profile-copy"><strong>{getProfileName(session)}</strong><small>PROFILE</small></span>
+            </button>
+            : <button className="auth-button" type="button" onClick={() => window.location.assign('/login')}>SIGN IN</button>}
+      </div>
     </header>
+
+    {toastMessage && <ToastNotice message={toastMessage} onDismiss={() => setToastMessage('')} />}
+    {syncMessage && <button className={`sync-status ${cloudLoading ? 'loading' : ''}`} type="button" onClick={() => setSyncMessage('')} aria-label={`${syncMessage} Dismiss`}>{syncMessage}</button>}
 
     <section className="hero" id="top">
       <div><p className="eyebrow"><span /> FILM DIARY · {viewDate.getFullYear()}</p><h1>What did you <em>watch?</em></h1></div>
@@ -330,8 +507,13 @@ export default function App() {
 
     <div className="dashboard-layout">
       <aside className="discovery-sidebar">
-        <section><div className="sidebar-heading"><p>YOUR LIST</p><span>{watchlist.length}/5</span></div><div className="sidebar-title-row"><h2>Watchlist</h2><button type="button" onClick={openWatchlistPicker} aria-label="Add a film to watchlist">+</button></div>
-          <div className="sidebar-list">{watchlist.map((movie) => <MovieLink key={movie.id} movie={movie} action={() => toggleWatchlist(movie)} />)}</div>
+        <section><div className="sidebar-heading"><p>YOUR LIST</p><span>{watchlist.length}</span></div><div className="sidebar-title-row"><h2>Watchlist</h2><button type="button" onClick={openWatchlistPicker} aria-label="Add a film to watchlist">+</button></div>
+          <div className="sidebar-list">{visibleWatchlist.map((movie) => <MovieLink key={movie.id} movie={movie} action={() => toggleWatchlist(movie)} />)}</div>
+          {watchlist.length > WATCHLIST_PAGE_SIZE && <nav className="watchlist-pagination" aria-label="Watchlist pages">
+            <button type="button" onClick={() => setWatchlistPage((page) => Math.max(0, page - 1))} disabled={currentWatchlistPage === 0}>PREV</button>
+            <span>{String(currentWatchlistPage + 1).padStart(2, '0')} / {String(watchlistPageCount).padStart(2, '0')}</span>
+            <button type="button" onClick={() => setWatchlistPage((page) => Math.min(watchlistPageCount - 1, page + 1))} disabled={currentWatchlistPage >= watchlistPageCount - 1}>NEXT</button>
+          </nav>}
         </section>
         <section><div className="sidebar-heading"><p>IN CINEMAS</p><span>05</span></div><h2>This month</h2>
           <div className="sidebar-list">{releases.length ? releases.map((movie) => <MovieLink key={movie.id} movie={movie} />) : <p className="sidebar-empty">No release data available for this month.</p>}</div>
@@ -378,13 +560,74 @@ export default function App() {
       <section className="movie-dialog watchlist-dialog" role="dialog" aria-modal="true" aria-labelledby="watchlist-dialog-title">
         <button className="close-button" type="button" onClick={closeDialog} aria-label="Close dialog">×</button>
         <p className="dialog-kicker">YOUR NEXT FRAME</p><h2 id="watchlist-dialog-title">Add to watchlist</h2>
-        <p className="dialog-intro">Search TMDB and keep up to five films close.</p>
+        <p className="dialog-intro">Search TMDB and keep films you want to watch close.</p>
         <form className="search-form" onSubmit={searchMovies}><SearchIcon /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a title…" aria-label="Watchlist movie title" autoFocus /><button type="submit" disabled={isSearching || !query.trim()}>{isSearching ? 'Searching…' : 'Search'}</button></form>
         {error && <p className="status-message" role="alert">{error}</p>}
         <div className="watchlist-picker-results">{results.map((movie) => <button type="button" key={movie.id} className={watchlist.some((item) => item.id === movie.id) ? 'added' : ''} onClick={() => toggleWatchlist(movie)}><img src={`${IMAGE_URL}${movie.poster_path}`} alt="" /><span><strong>{movie.title}</strong><small>{watchlist.some((item) => item.id === movie.id) ? 'ADDED ✓' : '+ ADD TO LIST'}</small></span></button>)}</div>
       </section>
     </div>}
+
+    {settingsOpen && session && <AccountSettings session={session} entries={entries} watchlist={watchlist} onClose={closeDialog} onExport={exportLibrary} />}
+
   </main>
+}
+
+function AccountSettings({ session, entries, watchlist, onClose, onExport }: {
+  session: Session
+  entries: Record<string, DiaryEntry>
+  watchlist: Movie[]
+  onClose: () => void
+  onExport: () => void
+}) {
+  const [displayName, setDisplayName] = useState(String(session.user.user_metadata.display_name ?? ''))
+  const [message, setMessage] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function saveProfile(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true)
+    setMessage('')
+    const { error } = await supabase.auth.updateUser({ data: { display_name: displayName.trim() } })
+    setSaving(false)
+    setMessage(error ? error.message : 'Profile updated.')
+  }
+
+  async function signOut() {
+    setSaving(true)
+    const { error } = await supabase.auth.signOut()
+    setSaving(false)
+    if (error) setMessage(error.message)
+    else onClose()
+  }
+
+  return <div className="dialog-backdrop settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+    <section className="account-settings" role="dialog" aria-modal="true" aria-labelledby="account-settings-title">
+      <button className="close-button" type="button" onClick={onClose} aria-label="Close account settings">×</button>
+      <p className="dialog-kicker">ACCOUNT</p>
+      <div className="account-identity">
+        <ProfileAvatar session={session} />
+        <div><h2 id="account-settings-title">{getProfileName(session)}</h2><p className="account-email">{session.user.email}</p></div>
+      </div>
+
+      <div className="account-summary" aria-label="Library summary">
+        <span><strong>{Object.keys(entries).length}</strong> FILMS LOGGED</span>
+        <span><strong>{watchlist.length}</strong> WATCHLIST</span>
+      </div>
+
+      <form className="account-profile-form" onSubmit={saveProfile}>
+        <label><span>DISPLAY NAME</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={60} autoComplete="name" placeholder="Optional" /></label>
+        <button type="submit" disabled={saving}>SAVE PROFILE</button>
+      </form>
+
+      {message && <p className="status-message" role="status">{message}</p>}
+
+      <div className="account-data-actions">
+        <div><strong>Export your data</strong><p>Download diary entries, ratings, notes and watchlist as a portable JSON file.</p></div>
+        <button type="button" onClick={onExport}>EXPORT JSON</button>
+      </div>
+      <button className="account-sign-out" type="button" onClick={signOut} disabled={saving}>SIGN OUT</button>
+    </section>
+  </div>
 }
 
 function JournalEditor({ comment, rating, saved, onComment, onRating, onSave }: { comment: string; rating: number; saved: boolean; onComment: (value: string) => void; onRating: (value: number) => void; onSave: () => void }) {

@@ -1,16 +1,18 @@
-# Reelendar Frontend
+# Reelendar
 
-Reelendar is a cinematic React film diary powered by the TMDB API.
+Reelendar is a cinematic React film diary powered by TMDB and Supabase.
 
 ## Current features
 
 - Monthly, yearly, and daily calendar views
 - TMDB movie search and monthly releases
-- Vertical poster calendar entries
-- Notes and 0.5-step ratings
-- Animated note preview and delete confirmation
-- Session-based watchlist
-- Future-date restrictions and responsive UI
+- Email/password authentication with Supabase Auth
+- Password recovery and Google OAuth-ready authentication
+- RLS-protected cloud diary and watchlist sync
+- Automatic migration of existing local diary data after sign-in
+- Account settings and portable JSON data export
+- Vitest integration tests for recovery, OAuth and export flows
+- Secure server-side TMDB proxy on Vercel
 
 ## Setup
 
@@ -20,18 +22,28 @@ copy .env.example .env
 npm run dev
 ```
 
-Add your TMDB API Read Access Token to `.env`:
+Configure `.env`:
 
 ```env
-VITE_TMDB_ACCESS_TOKEN=your_token
+TMDB_ACCESS_TOKEN=your_token
+PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_publishable_key
 ```
 
-## Planned
+`TMDB_ACCESS_TOKEN` is server-only. Supabase publishable keys are safe for the browser when Row Level Security policies are enabled.
 
-- ASP.NET Core Web API
-- PostgreSQL and EF Core persistence
-- Identity login with secure cookies
-- Persistent diary and watchlist
-- Backend TMDB proxy, validation, tests, and deployment
+## Supabase connection
+
+Follow [SUPABASE_SETUP.md](./SUPABASE_SETUP.md) to create the project, run the database migration, configure redirect URLs and enable Google OAuth.
+
+## Test
+
+```bash
+npm test
+```
+
+## Interface copy
+
+Keep product copy concise and neutral. Cinematic styling may appear in visual details, but avoid assigning the user production roles or using role-play language such as “director,” “cast,” or “roll camera.”
 
 TMDB provides movie data and imagery. This project is not endorsed or certified by TMDB.
