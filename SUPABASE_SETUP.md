@@ -9,9 +9,10 @@ Copy the project URL and publishable key from Supabase project settings into `.e
 ```env
 PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVER_ONLY_SERVICE_ROLE_KEY
 ```
 
-Add the same variables to the production host. Never place a service-role key in browser code or a `PUBLIC_` variable.
+Add the same variables to the production host. `SUPABASE_SERVICE_ROLE_KEY` is used only by the protected `/api/account` deletion endpoint. Never place it in browser code or a `PUBLIC_` variable.
 
 Vite gives mode-specific files such as `.env.development.local` higher priority than `.env.local`. If one exists, keep its Supabase values in sync or remove the stale override before restarting the development server.
 
@@ -21,7 +22,19 @@ Open the Supabase SQL editor and run:
 
 `supabase/migrations/202609110001_create_film_library.sql`
 
-This creates `diary_entries` and `watchlist_items`, their indexes, update trigger and user-owned Row Level Security policies.
+Then run:
+
+`supabase/migrations/202609290001_add_tv_support.sql`
+
+Finally run:
+
+`supabase/migrations/202609290002_create_series_tracker.sql`
+
+Then run:
+
+`supabase/migrations/202610060001_add_series_notes.sql`
+
+These create the film diary and watchlist tables plus the separate `series_library_items` and `episode_entries` tracker tables. They also configure indexes, triggers, and user-owned Row Level Security policies. Existing film rows are retained.
 
 ## 3. Authentication URLs
 
@@ -53,7 +66,6 @@ Verify these flows in order:
 3. Sign out and sign back in; confirm both records return.
 4. Request password recovery and set a new password.
 5. Sign in with Google.
-6. Open Account and export the library JSON.
+6. Open Profile and verify the language, avatar, sign-out confirmation, and account settings.
 7. Confirm one user cannot read another user's rows.
-
-Account deletion is intentionally not implemented in the browser. It requires a protected server-side function using elevated Supabase privileges.
+8. Test account deletion with `SUPABASE_SERVICE_ROLE_KEY` configured on the server host.
